@@ -1,0 +1,14 @@
+# Large data files — do NOT commit (too big for GitHub)
+*/imagery.tif
+*/boundaries.tif
+*/predictions_baseline.geojson
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# IDE
+.vscode/
+*.egg-info/
