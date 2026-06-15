@@ -154,11 +154,11 @@ Scored with the official in-browser self-score tool against the public example t
 | Vadnerbhairav | Median IoU | 0.612 | **0.870** (+0.233, 100% of plots improved) |
 | Vadnerbhairav | Accurate @ IoU≥.5 | — | **100%** |
 | Vadnerbhairav | Centroid error | — | **4.5 m** |
-| Vadnerbhairav | Calibration | — | rank corr **0.54** (AUC n/a — no misses) |
+| Vadnerbhairav | Calibration AUC | — | 0.73 → **0.80** (after Session 7) |
 | Malatavadi | Median IoU | 0.510 | **0.566** (+0.149, 67% of plots improved) |
 | Malatavadi | Accurate @ IoU≥.5 | — | **67%** |
 | Malatavadi | Centroid error | — | **5.6 m** |
-| Malatavadi | Calibration AUC | — | **0.00** (only 3 example plots — too few to be meaningful) |
+| Malatavadi | Calibration AUC | — | 0.00 → **0.33** (after Session 7; only 3 example plots) |
 
 Vadnerbhairav (open farmland, 2.4 m/px): large improvement because boundaries are clear and the FFT cross-correlation finds clean peaks.
 
@@ -166,17 +166,56 @@ Malatavadi (dense urban, 1.2 m/px): smaller improvement because crowded adjacent
 
 ---
 
-## Session 7 — What I Would Improve
+## Session 7 — Fixing Calibration the Data-Driven Way
+
+**User:**
+The official self-score tool reports Malatavadi calibration AUC = 0.00. The
+confidence ranking is exactly inverted on the example plots. How do I fix this
+without overfitting to 3 plots?
+
+**AI:**
+First measure, don't guess. Build a diagnostic that, for each example-truth
+plot, runs the full pipeline and records every candidate confidence signal
+alongside the *actual* IoU achieved against the truth. Then look at which signal
+predicts accuracy (Spearman / pairwise concordance). The findings:
+
+- In **Malatavadi** the single example *miss* (plot 1177, IoU 0.44) had the
+  **sharpest** cross-correlation peak — so raw peak prominence gave it the
+  highest confidence, inverting the ranking. But that peak was **ambiguous**:
+  its unambiguity (`1 − 2nd-peak/​top-peak`) was only 0.13 — a neighbour's edge
+  was nearly as strong.
+- The originally-proposed "improvement" signal
+  (`alignment(corrected) − alignment(global)`) correlated *negatively* with
+  accuracy on **both** villages — so it was dropped.
+
+**Fix:** modulate edge quality by unambiguity (a Lowe-style ratio test):
+`eq_eff = eq · (0.35 + 0.65 · unambiguity)`, then
+`confidence = 0.55·eq_eff + 0.25·area_f + 0.20·shift_f`.
+
+A sharp peak only earns full confidence when it dominates its rivals. Comparing
+candidate formulas against the example IoUs, this was a Pareto improvement:
+
+| Village | Calibration AUC before | after |
+|---|---|---|
+| Vadnerbhairav | 0.73 | **0.80** |
+| Malatavadi | 0.00 | **0.33** |
+
+It changes only confidence, not geometry — IoU and centroid error are
+unchanged. Malatavadi stalls at 0.33 because its best-placed example plot
+genuinely has the weakest edge signal; chasing higher on 3 points would be
+overfitting, which the self-score tool itself warns against.
+
+---
+
+## Session 8 — What I Would Still Improve
 
 **User:**
 What would you improve given more time?
 
 **AI:**
-Three areas:
-
 1. **Rotation correction** — The global shift assumes only translation. Some village sheets were also rotated slightly during georeferencing. Estimating a per-village rotation from the example truths would help.
 
-2. **Better Malatavadi calibration** — In dense villages, a high cross-correlation quality can mean "confidently found the wrong boundary." A better signal would be: `alignment_at_corrected_position - alignment_at_globally_shifted_position` (improvement score rather than absolute quality).
+2. **Density-aware confidence** — The unambiguity factor already handles much of the dense-village problem, but an explicit local plot-density term could weight the edge vs. shift-consistency signals per neighbourhood rather than with fixed global weights.
 
 3. **Multi-scale cross-correlation** — Run the correlation at coarse resolution first to find the approximate shift, then refine at full resolution. This would be more robust to large drifts while remaining precise.
 

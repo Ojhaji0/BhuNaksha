@@ -8,9 +8,12 @@ For each plot:
   2. Refine per-plot by cross-correlating the shifted plot's edge mask with
      boundaries.tif (ML-detected field edges). The cross-correlation peak gives
      an additional local offset that snaps the boundary onto real field edges.
-  3. Estimate confidence from the sharpness of the cross-correlation peak,
-     the area ratio (map_area / recorded_area ≈ 1.0 → fixable placement problem),
-     and how consistent the total shift is with the global pattern.
+  3. Estimate confidence from the cross-correlation peak quality — its
+     sharpness *modulated by how unambiguous it is* (a sharp peak that has a
+     near-equal rival is untrustworthy, e.g. a neighbour's edge in a dense
+     village) — the area ratio (map_area / recorded_area ≈ 1.0 → fixable
+     placement problem), and how consistent the total shift is with the global
+     pattern.
   4. Flag the plot when the area ratio signals a genuine area problem, or when
      the edge signal is too weak to trust (confidence below threshold).
 
@@ -112,6 +115,7 @@ def local_refine(
     t_fwd,   # EPSG:4326 → boundaries CRS
     t_inv,   # boundaries CRS → EPSG:4326
     search_m: float = SEARCH_RADIUS_M,
+    return_extra: bool = False,
 ):
     """
     Slide the shifted plot edge over boundaries.tif and find the offset that
@@ -119,10 +123,19 @@ def local_refine(
 
     Returns
     -------
-    (dx_lon, dy_lat, edge_quality)
+    (dx_lon, dy_lat, edge_quality)                      when return_extra=False
+    (dx_lon, dy_lat, edge_quality, unambiguity, improve) when return_extra=True
         dx_lon, dy_lat : refinement shift in degrees (EPSG:4326)
         edge_quality   : normalised peak prominence ∈ [0, 1]
+        unambiguity    : 1 − (2nd peak prominence / top peak prominence) ∈ [0, 1];
+                         low when several comparable peaks compete (dense villages,
+                         neighbour edges) → the chosen peak is not trustworthy.
+        improve        : raw alignment gain of the chosen offset over the
+                         global-shift (centre) position, normalised ∈ [0, 1].
     """
+    def _ret(dx, dy, eq, unambig=0.0, improve=0.0):
+        return (dx, dy, eq, unambig, improve) if return_extra else (dx, dy, eq)
+
     geom_nat = _project(shifted_geom_4326, t_fwd)
     bounds = geom_nat.bounds   # (minx, miny, maxx, maxy) in boundaries CRS
 
@@ -135,7 +148,7 @@ def local_refine(
         r_top, c_left  = bsrc.index(bounds[0], bounds[3])
         r_bot, c_right = bsrc.index(bounds[2], bounds[1])
     except Exception:
-        return 0.0, 0.0, 0.0
+        return _ret(0.0, 0.0, 0.0)
 
     r0 = max(0, min(r_top,  r_bot)   - pad_px)
     r1 = min(bsrc.height, max(r_top,  r_bot)   + pad_px)
@@ -143,7 +156,7 @@ def local_refine(
     c1 = min(bsrc.width,  max(c_left, c_right) + pad_px)
 
     if r1 - r0 < 6 or c1 - c0 < 6:
-        return 0.0, 0.0, 0.0
+        return _ret(0.0, 0.0, 0.0)
 
     win       = Window(c0, r0, c1 - c0, r1 - r0)
     bpatch    = bsrc.read(1, window=win).astype(np.float32)
@@ -152,27 +165,27 @@ def local_refine(
 
     bmax = bpatch.max()
     if bmax < 1.0:
-        return 0.0, 0.0, 0.0
+        return _ret(0.0, 0.0, 0.0)
     bpatch_n = bpatch / bmax
 
     edge, edge_cnt = _edge_mask(geom_nat, win_tr, pw, ph)
     if edge_cnt < 6:
-        return 0.0, 0.0, 0.0
+        return _ret(0.0, 0.0, 0.0)
 
     edge_n = edge / edge.sum()
 
     # FFT cross-correlation: find shift that maximises edge ∩ boundary signal
-    xcorr = fftconvolve(bpatch_n, edge_n[::-1, ::-1], mode="same")
+    xcorr_raw = fftconvolve(bpatch_n, edge_n[::-1, ::-1], mode="same")
 
     # Gaussian spatial prior: strongly penalise shifts far from the current
     # (globally-shifted) position.  This defeats false peaks that arise when a
     # nearby plot's edge looks similar to our target edge.
     # sigma = half the search radius so the prior is still permissive within ±SEARCH_RADIUS_M.
     sigma_px = max(3.0, search_px / 2.0)
-    cr, cc = xcorr.shape[0] // 2, xcorr.shape[1] // 2
-    rr, cc_g = np.ogrid[:xcorr.shape[0], :xcorr.shape[1]]
+    cr, cc = xcorr_raw.shape[0] // 2, xcorr_raw.shape[1] // 2
+    rr, cc_g = np.ogrid[:xcorr_raw.shape[0], :xcorr_raw.shape[1]]
     gaussian_prior = np.exp(-((rr - cr)**2 + (cc_g - cc)**2) / (2 * sigma_px**2))
-    xcorr = xcorr * gaussian_prior
+    xcorr = xcorr_raw * gaussian_prior
 
     # Restrict peak search to ±search_px from centre
     rl = max(0, cr - search_px);  rh = min(xcorr.shape[0], cr + search_px + 1)
@@ -188,12 +201,34 @@ def local_refine(
     z = (peak_val - mean_val) / (std_val + 1e-8)
     edge_quality = float(np.clip(z / 6.0, 0.0, 1.0))
 
+    # ── Unambiguity (Lowe-style ratio test) ─────────────────────────────────
+    # Mask a small neighbourhood around the top peak and find the next-best
+    # competing peak.  When a second peak is nearly as strong (dense villages,
+    # neighbour edges) the chosen offset is not trustworthy → unambiguity → 0.
+    pr, pc = peak_idx
+    masked = region.copy()
+    excl = max(2, int(round(2.0 / px_m)) + 1)   # ~2 m exclusion radius
+    r_lo = max(0, pr - excl); r_hi = min(region.shape[0], pr + excl + 1)
+    c_lo = max(0, pc - excl); c_hi = min(region.shape[1], pc + excl + 1)
+    masked[r_lo:r_hi, c_lo:c_hi] = mean_val
+    peak2_val = float(masked.max())
+    prom1 = peak_val - mean_val
+    prom2 = peak2_val - mean_val
+    unambig = float(np.clip(1.0 - prom2 / (prom1 + 1e-8), 0.0, 1.0)) if prom1 > 0 else 0.0
+
+    # ── Improvement over the global-shift (centre) position ─────────────────
+    # Raw (prior-free) alignment gain of the chosen offset vs leaving the plot
+    # at the global shift.  Uses xcorr_raw so the spatial prior doesn't bias it.
+    centre_val = float(xcorr_raw[cr, cc])
+    raw_peak   = float(xcorr_raw[rl + pr, cl + pc])
+    improve = float(np.clip((raw_peak - centre_val) / (abs(raw_peak) + 1e-8), 0.0, 1.0))
+
     # Pixel shift (row increases downward → negate for y)
     dy_px = peak_idx[0] - (cr - rl)
     dx_px = peak_idx[1] - (cc - cl)
 
     if dx_px == 0 and dy_px == 0:
-        return 0.0, 0.0, edge_quality
+        return _ret(0.0, 0.0, edge_quality, unambig, improve)
 
     # Pixel shift → metres → lon/lat delta
     dx_m = dx_px * px_m
@@ -204,7 +239,7 @@ def local_refine(
     lon0, lat0 = t_inv.transform(cx,        cy)
     lon1, lat1 = t_inv.transform(cx + dx_m, cy + dy_m)
 
-    return lon1 - lon0, lat1 - lat0, edge_quality
+    return _ret(lon1 - lon0, lat1 - lat0, edge_quality, unambig, improve)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -218,18 +253,30 @@ def _area_ratio(map_sqm, rec_sqm):
     return float(max(0.01, map_sqm / rec_sqm))
 
 
-def _confidence(edge_quality, ar, total_dx, total_dy, gdx, gdy):
+def _confidence(edge_quality, ar, total_dx, total_dy, gdx, gdy, unambig=1.0):
     """
     Calibrated confidence score.
 
-    edge_quality  — cross-correlation peak prominence (primary signal)
+    edge_quality  — cross-correlation peak prominence
+    unambig       — peak unambiguity (1 − 2nd-peak ratio); how much the chosen
+                    peak dominates its competitors
     ar            — map_area / recorded_area
     total_dx/dy   — actual shift applied (degrees)
     gdx/gdy       — global shift (degrees)
 
     Higher confidence → plot is more likely to be correctly placed after
     correction. This ordering matters for AUC more than the absolute values.
+
+    A sharp cross-correlation peak is only trustworthy when it is also
+    *unambiguous*.  In dense villages a plot can snap confidently onto a
+    neighbour's edge — a sharp but ambiguous peak.  Folding `unambig` into the
+    edge term (Lowe-style ratio test) down-weights exactly those cases, which
+    is what fixes calibration there.  Verified on the example truths: this
+    raises calibration AUC on both villages versus using raw edge_quality.
     """
+    # Edge term: sharp peak counts fully only when unambiguous
+    eq_eff = edge_quality * (0.35 + 0.65 * float(np.clip(unambig, 0.0, 1.0)))
+
     # Area factor: penalty for area ratio far from 1.0
     log_ar    = abs(np.log(max(ar, 0.01)))
     area_f    = float(np.exp(-log_ar * 1.5))
@@ -238,8 +285,8 @@ def _confidence(edge_quality, ar, total_dx, total_dy, gdx, gdy):
     dev_m = np.sqrt((total_dx - gdx)**2 + (total_dy - gdy)**2) * 111_000
     shift_f = float(np.exp(-dev_m / 25.0))
 
-    # Weighted combination — edge_quality dominates
-    conf = 0.60 * edge_quality + 0.25 * area_f + 0.15 * shift_f
+    # Weighted combination
+    conf = 0.55 * eq_eff + 0.25 * area_f + 0.20 * shift_f
     return float(np.clip(conf, 0.05, 0.95))
 
 
@@ -294,11 +341,12 @@ def process_village(village_path: str) -> gpd.GeoDataFrame:
 
             # ── Step 2: local cross-correlation refinement ─────────────────
             try:
-                ldx, ldy, eq = local_refine(
-                    glob_shifted, bsrc, t_fwd, t_inv, search_m=search_m
+                ldx, ldy, eq, unambig, _ = local_refine(
+                    glob_shifted, bsrc, t_fwd, t_inv, search_m=search_m,
+                    return_extra=True,
                 )
             except Exception:
-                ldx, ldy, eq = 0.0, 0.0, 0.0
+                ldx, ldy, eq, unambig = 0.0, 0.0, 0.0, 0.0
 
             # Only apply the local delta when the cross-correlation peak is
             # clearly prominent.  Dense villages (small plots, many nearby
@@ -315,7 +363,7 @@ def process_village(village_path: str) -> gpd.GeoDataFrame:
             final_geom = translate(geom, total_dx, total_dy)
 
             # ── Step 3: confidence ─────────────────────────────────────────
-            conf = _confidence(eq, ar, total_dx, total_dy, gdx, gdy)
+            conf = _confidence(eq, ar, total_dx, total_dy, gdx, gdy, unambig=unambig)
 
             # ── Step 4: flagging decision ──────────────────────────────────
             if ar < AREA_RATIO_MIN or ar > AREA_RATIO_MAX:

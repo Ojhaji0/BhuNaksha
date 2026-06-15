@@ -39,9 +39,15 @@ georeferencing. So correction happens in two stages, global then local.
 
    | Signal | Weight | Meaning |
    |---|---:|---|
-   | Edge quality (cross-corr peak prominence) | 60% | Sharper peak → cleaner alignment |
+   | Edge quality × **unambiguity** | 55% | Peak sharpness, *modulated by how much it dominates its nearest rival* (Lowe-style ratio test) — a sharp but ambiguous peak (e.g. a neighbour's edge) is untrustworthy |
    | Area factor `exp(−|ln(area_ratio)|·1.5)` | 25% | `area_ratio ≈ 1.0` → fixable placement problem |
-   | Shift consistency `exp(−dev/25 m)` | 15% | Large deviation from global shift is suspicious |
+   | Shift consistency `exp(−dev/25 m)` | 20% | Large deviation from global shift is suspicious |
+
+   The **unambiguity** factor (`1 − 2nd-peak prominence / top-peak prominence`)
+   is what makes confidence calibrated in dense villages: there a plot can snap
+   *confidently onto the wrong edge*, producing a sharp peak that raw prominence
+   would reward. Folding unambiguity into the edge term raised calibration on
+   both villages (see below) without changing any geometry.
 
 4. **Flagging (restraint)** — A plot is **flagged** and left *unmoved* when:
    - `area_ratio` falls outside `[0.40, 2.50]` — an area problem (subdivision,
@@ -50,23 +56,34 @@ georeferencing. So correction happens in two stages, global then local.
 
    Leaving a plot in place is more honest than moving it on a guess.
 
-## Results (official self-score tool, vs public `example_truths`)
+## Results (vs public `example_truths`)
 
-| Village | Median IoU (official → ours) | Improvement | Accurate @ IoU≥.5 | Median centroid err | Calibration |
-|---|---|---|---|---|---|
-| Vadnerbhairav (open farmland, 2.4 m/px) | 0.612 → **0.870** | **+0.233** (100% of plots improved) | **100%** | **4.5 m** | rank corr **0.54** (AUC n/a — no misses to rank against) |
-| Malatavadi (dense, 1.2 m/px) | 0.510 → **0.566** | **+0.149** (67% of plots improved) | **67%** | **5.6 m** | AUC **0.00** (3 example plots only — too few to be meaningful) |
+| Village | Median IoU (official → ours) | Accurate @ IoU≥.5 | Median centroid err | Calibration AUC |
+|---|---|---|---|---|
+| Vadnerbhairav (open farmland, 2.4 m/px) | 0.612 → **0.870** (+0.233, 100% of plots improved) | **100%** | **4.5 m** | 0.73 → **0.80** |
+| Malatavadi (dense, 1.2 m/px) | 0.510 → **0.566** (+0.149, 67% of plots improved) | **67%** | **5.6 m** | 0.00 → **0.33** |
 
 Vadnerbhairav improves strongly because field edges are clear and the
 correlation finds clean peaks. Malatavadi is harder — crowded adjacent
-boundaries create ambiguous correlation surfaces — where the Gaussian prior and
-tighter adaptive search radius matter most.
+boundaries create ambiguous correlation surfaces — where the Gaussian prior,
+tighter adaptive search radius, and the unambiguity-weighted confidence matter
+most.
 
-> These figures come from the official in-browser self-score tool, which scores
-> against the small public set of example truths (6 plots in Vadnerbhairav,
-> 3 in Malatavadi). Calibration in particular needs far more plots to be
-> meaningful — the tool itself flags this — so the IoU/centroid numbers are the
-> reliable directional signal here; the real grade uses a larger hidden set.
+**Calibration** was improved by the unambiguity factor described above: it
+moved both villages up (Vadnerbhairav 0.73→0.80; Malatavadi, whose single
+example *miss* had a sharp-but-ambiguous peak that previously earned top
+confidence, 0.00→0.33) **without changing any geometry**, so IoU and centroid
+error are untouched. The diagnostic that drove this — measuring each candidate
+signal against the actual per-plot IoU — is in [`diagnose_confidence.py`](diagnose_confidence.py).
+
+> IoU/centroid figures are from the official in-browser self-score tool;
+> calibration figures are from the local scorer in `bhume_kit.py`, which mirrors
+> the same concordance metric. All are scored against the small public example
+> set (6 plots in Vadnerbhairav, 3 in Malatavadi), so calibration especially is
+> noisy — treat these as a directional check, not a grade. Malatavadi stalls at
+> 0.33 because its best-placed example plot genuinely has the weakest edge
+> signal; pushing past that on 3 points would just be overfitting. The real
+> grade uses a larger hidden set.
 
 ## Usage
 
@@ -116,8 +133,16 @@ Each feature in `predictions.geojson` carries:
 
 - **Rotation correction** — the global stage assumes pure translation; some
   sheets were also slightly rotated during georeferencing.
-- **Improvement-based confidence in dense villages** — score
-  `alignment(corrected) − alignment(global-only)` instead of absolute peak
-  quality, since a sharp peak can mean "confidently snapped to the wrong edge."
+- **Density-aware confidence** — the reliability of the edge signal depends on
+  how crowded a village is. The unambiguity factor handles much of this, but an
+  explicit local plot-density term could weight the edge vs. shift-consistency
+  signals per neighbourhood rather than globally.
 - **Multi-scale cross-correlation** — coarse-to-fine search for robustness to
   large drifts while keeping sub-pixel precision.
+
+> Note: an earlier idea — confidence from *alignment improvement*
+> (`alignment(corrected) − alignment(global-only)`) — was implemented and
+> measured against the example truths in `diagnose_confidence.py`, but it
+> correlated **negatively** with accuracy on both villages, so it was dropped in
+> favour of the unambiguity (Lowe-ratio) factor. Measuring candidate signals
+> before committing to them is the point of that diagnostic.
