@@ -154,11 +154,11 @@ Scored with the official in-browser self-score tool against the public example t
 | Vadnerbhairav | Median IoU | 0.612 | **0.870** (+0.233, 100% of plots improved) |
 | Vadnerbhairav | Accurate @ IoU≥.5 | — | **100%** |
 | Vadnerbhairav | Centroid error | — | **4.5 m** |
-| Vadnerbhairav | Calibration AUC | — | 0.73 → **0.80** (after Session 7) |
+| Vadnerbhairav | Calibration | — | rank corr 0.54 → **0.71** (after Session 7) |
 | Malatavadi | Median IoU | 0.510 | **0.566** (+0.149, 67% of plots improved) |
 | Malatavadi | Accurate @ IoU≥.5 | — | **67%** |
 | Malatavadi | Centroid error | — | **5.6 m** |
-| Malatavadi | Calibration AUC | — | 0.00 → **0.33** (after Session 7; only 3 example plots) |
+| Malatavadi | Calibration AUC | — | 0.00 → **0.50** (after Session 7; only 3 example plots) |
 
 Vadnerbhairav (open farmland, 2.4 m/px): large improvement because boundaries are clear and the FFT cross-correlation finds clean peaks.
 
@@ -195,15 +195,17 @@ predicts accuracy (Spearman / pairwise concordance). The findings:
 A sharp peak only earns full confidence when it dominates its rivals. Comparing
 candidate formulas against the example IoUs, this was a Pareto improvement:
 
-| Village | Calibration AUC before | after |
+| Village | Calibration before | after (confirmed by official tool) |
 |---|---|---|
-| Vadnerbhairav | 0.73 | **0.80** |
-| Malatavadi | 0.00 | **0.33** |
+| Vadnerbhairav | rank corr 0.54 | **0.71** |
+| Malatavadi | AUC 0.00 | **0.50** |
 
 It changes only confidence, not geometry — IoU and centroid error are
-unchanged. Malatavadi stalls at 0.33 because its best-placed example plot
-genuinely has the weakest edge signal; chasing higher on 3 points would be
-overfitting, which the self-score tool itself warns against.
+unchanged. Malatavadi's example *miss* no longer earns top confidence, lifting
+it from a perfectly-inverted 0.00 to chance-level 0.50; with only 3 example
+plots, chasing higher would be overfitting, which the self-score tool itself
+warns against. (Vadnerbhairav reports a rank correlation, not AUC, because all
+six example plots are hits — no miss to rank against.)
 
 ---
 

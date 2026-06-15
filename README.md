@@ -56,12 +56,12 @@ georeferencing. So correction happens in two stages, global then local.
 
    Leaving a plot in place is more honest than moving it on a guess.
 
-## Results (vs public `example_truths`)
+## Results (official self-score tool, vs public `example_truths`)
 
-| Village | Median IoU (official → ours) | Accurate @ IoU≥.5 | Median centroid err | Calibration AUC |
+| Village | Median IoU (official → ours) | Accurate @ IoU≥.5 | Median centroid err | Calibration |
 |---|---|---|---|---|
-| Vadnerbhairav (open farmland, 2.4 m/px) | 0.612 → **0.870** (+0.233, 100% of plots improved) | **100%** | **4.5 m** | 0.73 → **0.80** |
-| Malatavadi (dense, 1.2 m/px) | 0.510 → **0.566** (+0.149, 67% of plots improved) | **67%** | **5.6 m** | 0.00 → **0.33** |
+| Vadnerbhairav (open farmland, 2.4 m/px) | 0.612 → **0.870** (+0.233, 100% of plots improved) | **100%** | **4.5 m** | rank corr 0.54 → **0.71** |
+| Malatavadi (dense, 1.2 m/px) | 0.510 → **0.566** (+0.149, 67% of plots improved) | **67%** | **5.6 m** | AUC 0.00 → **0.50** |
 
 Vadnerbhairav improves strongly because field edges are clear and the
 correlation finds clean peaks. Malatavadi is harder — crowded adjacent
@@ -69,21 +69,20 @@ boundaries create ambiguous correlation surfaces — where the Gaussian prior,
 tighter adaptive search radius, and the unambiguity-weighted confidence matter
 most.
 
-**Calibration** was improved by the unambiguity factor described above: it
-moved both villages up (Vadnerbhairav 0.73→0.80; Malatavadi, whose single
-example *miss* had a sharp-but-ambiguous peak that previously earned top
-confidence, 0.00→0.33) **without changing any geometry**, so IoU and centroid
-error are untouched. The diagnostic that drove this — measuring each candidate
-signal against the actual per-plot IoU — is in [`diagnose_confidence.py`](diagnose_confidence.py).
+**Calibration** was improved by the unambiguity factor described above, and the
+gain is confirmed by the official tool: Vadnerbhairav rank correlation
+0.54 → 0.71, and Malatavadi — whose single example *miss* had a
+sharp-but-ambiguous peak that previously earned top confidence — AUC
+0.00 → 0.50. This was achieved **without changing any geometry**, so IoU and
+centroid error are untouched. (Vadnerbhairav reports a rank correlation rather
+than AUC because all six example plots are hits, leaving no miss to rank
+against.) The diagnostic that drove this — measuring each candidate signal
+against the actual per-plot IoU — is in [`diagnose_confidence.py`](diagnose_confidence.py).
 
-> IoU/centroid figures are from the official in-browser self-score tool;
-> calibration figures are from the local scorer in `bhume_kit.py`, which mirrors
-> the same concordance metric. All are scored against the small public example
-> set (6 plots in Vadnerbhairav, 3 in Malatavadi), so calibration especially is
-> noisy — treat these as a directional check, not a grade. Malatavadi stalls at
-> 0.33 because its best-placed example plot genuinely has the weakest edge
-> signal; pushing past that on 3 points would just be overfitting. The real
-> grade uses a larger hidden set.
+> All figures are scored against the small public example set (6 plots in
+> Vadnerbhairav, 3 in Malatavadi), so calibration especially is noisy — the tool
+> itself says to treat these as a directional check, not a grade, and not to
+> overfit to so few plots. The real grade uses a larger hidden set.
 
 ## Usage
 
