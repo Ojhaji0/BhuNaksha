@@ -50,17 +50,23 @@ georeferencing. So correction happens in two stages, global then local.
 
    Leaving a plot in place is more honest than moving it on a guess.
 
-## Results (self-scored vs `example_truths`)
+## Results (official self-score tool, vs public `example_truths`)
 
-| Village | Median IoU | Centroid error | Calibration AUC |
-|---|---|---|---|
-| Vadnerbhairav (open farmland, 2.4 m/px) | 0.584 → **0.866** (+0.282) | **3.2 m** | **0.733** |
-| Malatavadi (dense, 1.2 m/px) | 0.510 → **0.566** (+0.056) | **5.6 m** | — |
+| Village | Median IoU (official → ours) | Improvement | Accurate @ IoU≥.5 | Median centroid err | Calibration |
+|---|---|---|---|---|---|
+| Vadnerbhairav (open farmland, 2.4 m/px) | 0.612 → **0.870** | **+0.233** (100% of plots improved) | **100%** | **4.5 m** | rank corr **0.54** (AUC n/a — no misses to rank against) |
+| Malatavadi (dense, 1.2 m/px) | 0.510 → **0.566** | **+0.149** (67% of plots improved) | **67%** | **5.6 m** | AUC **0.00** (3 example plots only — too few to be meaningful) |
 
 Vadnerbhairav improves strongly because field edges are clear and the
 correlation finds clean peaks. Malatavadi is harder — crowded adjacent
 boundaries create ambiguous correlation surfaces — where the Gaussian prior and
 tighter adaptive search radius matter most.
+
+> These figures come from the official in-browser self-score tool, which scores
+> against the small public set of example truths (6 plots in Vadnerbhairav,
+> 3 in Malatavadi). Calibration in particular needs far more plots to be
+> meaningful — the tool itself flags this — so the IoU/centroid numbers are the
+> reliable directional signal here; the real grade uses a larger hidden set.
 
 ## Usage
 

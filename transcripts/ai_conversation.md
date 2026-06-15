@@ -147,15 +147,18 @@ When flagged, output the **original geometry unchanged**. This is honest — it'
 What scores did the method achieve against example_truths?
 
 **AI:**
-Self-scored against the provided example truths:
+Scored with the official in-browser self-score tool against the public example truths:
 
 | Village | Metric | Official baseline | This solution |
 |---|---|---|---|
-| Vadnerbhairav | Median IoU | 0.584 | **0.866** (+0.282) |
-| Vadnerbhairav | Centroid error | ~15–20 m | **3.2 m** |
-| Vadnerbhairav | Calibration AUC | — | **0.733** |
-| Malatavadi | Median IoU | 0.510 | **0.566** (+0.056) |
+| Vadnerbhairav | Median IoU | 0.612 | **0.870** (+0.233, 100% of plots improved) |
+| Vadnerbhairav | Accurate @ IoU≥.5 | — | **100%** |
+| Vadnerbhairav | Centroid error | — | **4.5 m** |
+| Vadnerbhairav | Calibration | — | rank corr **0.54** (AUC n/a — no misses) |
+| Malatavadi | Median IoU | 0.510 | **0.566** (+0.149, 67% of plots improved) |
+| Malatavadi | Accurate @ IoU≥.5 | — | **67%** |
 | Malatavadi | Centroid error | — | **5.6 m** |
+| Malatavadi | Calibration AUC | — | **0.00** (only 3 example plots — too few to be meaningful) |
 
 Vadnerbhairav (open farmland, 2.4 m/px): large improvement because boundaries are clear and the FFT cross-correlation finds clean peaks.
 
